@@ -1,0 +1,9 @@
+docker run -d \
+  -p 9527:9527 \
+  -v $(pwd)/data:/server/data \
+  -v $(pwd)/logs:/server/logs \
+  -v $(pwd)/cache:/server/cache \
+  -v $(pwd)/music:/server/music \
+  --name lx-sync-server \
+  --restart unless-stopped \
+  xcq0607/lxserver:latest
