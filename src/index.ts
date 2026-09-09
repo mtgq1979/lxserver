@@ -6,7 +6,6 @@ import crypto from 'crypto'
 import moduleAlias from 'module-alias'
 // @ts-ignore
 moduleAlias.addAliases({
-  '@common': path.join(__dirname, 'common'),
   '@renderer': path.join(__dirname, 'modules'),
   '@': __dirname
 })
@@ -35,6 +34,20 @@ process.on('unhandledRejection', (reason, p) => {
 let envParams: Partial<Record<Exclude<ENV_PARAMS_Value_Type, 'LX_USER_'>, string>> = {}
 let envUsers: LX.User[] = []
 const envParamKeys = Object.values(ENV_PARAMS).filter(v => v != 'LX_USER_')
+const parseBool = (val?: string): boolean | undefined => {
+  if (val === undefined || val === null || val === '') return undefined
+  const str = String(val).trim().toLowerCase()
+  if (['true', '1', 'yes', 'y', 'on'].includes(str)) return true
+  if (['false', '0', 'no', 'n', 'off'].includes(str)) return false
+  return undefined
+}
+const setBoolConfig = <K extends keyof LX.Config>(key: K, val?: string) => {
+  const parsed = parseBool(val)
+  if (parsed !== undefined) {
+    // @ts-expect-error
+    global.lx.config[key] = parsed
+  }
+}
 
 {
   const envLog = [
@@ -73,15 +86,20 @@ const getConfigHash = (filePath: string) => {
 }
 
 const dataPath = envParams.DATA_PATH ?? path.join(__dirname, '../data')
+const resolvedConfigPath = process.env.CONFIG_PATH || path.join(dataPath, 'config.js')
+
 const saveConfigToFile = () => {
-  const configPath = process.env.CONFIG_PATH || path.join(process.cwd(), 'config.js')
   const content = `module.exports = ${JSON.stringify(global.lx.config, null, 2)}`
   try {
-    fs.writeFileSync(configPath, content)
+    const targetDir = path.dirname(global.lx.configPath)
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true })
+    }
+    fs.writeFileSync(global.lx.configPath, content)
     lastConfigHash = crypto.createHash('md5').update(content).digest('hex')
-    // console.log('Current memory config saved to config.js')
+    // console.log('Current memory config saved to ' + global.lx.configPath)
   } catch (err) {
-    console.error('Failed to save config.js:', err)
+    console.error('Failed to save config file:', err)
   }
 }
 
@@ -91,6 +109,7 @@ global.lx = {
   userPath: path.join(dataPath, File.userDir),
   config: defaultConfig,
   staticPath: process.env.STATIC_PATH ?? path.join(process.cwd(), 'public'),
+  configPath: resolvedConfigPath,
   saveConfig: saveConfigToFile,
 }
 
@@ -151,10 +170,40 @@ const margeConfig = (p: string) => {
   return true
 }
 
-//加载环境变量
-const p1 = path.join(__dirname, '../config.js')
-fs.existsSync(p1) && margeConfig(p1)
-envParams.CONFIG_PATH && fs.existsSync(envParams.CONFIG_PATH) && margeConfig(envParams.CONFIG_PATH)
+// 配置文件加载与平滑迁移
+const activeConfigPath = global.lx.configPath
+const rootLegacyConfigPath = path.join(process.cwd(), 'config.js')
+const bundledConfigPath = path.join(__dirname, '../config.js')
+
+if (fs.existsSync(activeConfigPath)) {
+  margeConfig(activeConfigPath)
+} else {
+  // 如果当前目标配置文件尚不存在（例如首次启动或从旧版升级）
+  // 优先尝试从根目录的旧 config.js 迁移过来
+  const candidateLegacy = fs.existsSync(rootLegacyConfigPath)
+    ? rootLegacyConfigPath
+    : (fs.existsSync(bundledConfigPath) ? bundledConfigPath : null)
+
+  if (candidateLegacy && path.resolve(candidateLegacy) !== path.resolve(activeConfigPath)) {
+    try {
+      const targetDir = path.dirname(activeConfigPath)
+      if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(targetDir, { recursive: true })
+      }
+      fs.copyFileSync(candidateLegacy, activeConfigPath)
+      console.log(`[Config] Initialized config in data dir: copied ${candidateLegacy} -> ${activeConfigPath}`)
+      margeConfig(activeConfigPath)
+    } catch (e: any) {
+      console.warn(`[Config] Failed to copy legacy config to ${activeConfigPath}:`, e.message)
+      margeConfig(candidateLegacy)
+    }
+  }
+}
+
+// 显式指定的 CONFIG_PATH 具有最高配置文件优先级
+if (envParams.CONFIG_PATH && fs.existsSync(envParams.CONFIG_PATH) && path.resolve(envParams.CONFIG_PATH) !== path.resolve(activeConfigPath)) {
+  margeConfig(envParams.CONFIG_PATH)
+}
 if (envParams.PROXY_HEADER) {
   global.lx.config['proxy.enabled'] = true
   global.lx.config['proxy.header'] = envParams.PROXY_HEADER
@@ -174,8 +223,8 @@ if (envParams.LIST_ADD_MUSIC_LOCATION_TYPE) {
 if (envParams.FRONTEND_PASSWORD) {
   global.lx.config['frontend.password'] = envParams.FRONTEND_PASSWORD
 }
-if (envParams.WEBDAV_ENABLE) {
-  global.lx.config['webdav.enable'] = envParams.WEBDAV_ENABLE === 'true'
+if (envParams.WEBDAV_ENABLE !== undefined) {
+  setBoolConfig('webdav.enable', envParams.WEBDAV_ENABLE)
 }
 if (envParams.WEBDAV_URL) {
   global.lx.config['webdav.url'] = envParams.WEBDAV_URL
@@ -200,11 +249,11 @@ if (envParams.BACKUP_INTERVAL) {
   const backupInterval = parseInt(envParams.BACKUP_INTERVAL)
   if (!isNaN(backupInterval)) global.lx.config['sync.backupInterval'] = backupInterval
 }
-if (envParams.USER_ENABLE_PATH) {
-  global.lx.config['user.enablePath'] = envParams.USER_ENABLE_PATH === 'true'
+if (envParams.USER_ENABLE_PATH !== undefined) {
+  setBoolConfig('user.enablePath', envParams.USER_ENABLE_PATH)
 }
-if (envParams.USER_ENABLE_ROOT) {
-  global.lx.config['user.enableRoot'] = envParams.USER_ENABLE_ROOT === 'true'
+if (envParams.USER_ENABLE_ROOT !== undefined) {
+  setBoolConfig('user.enableRoot', envParams.USER_ENABLE_ROOT)
 }
 if (envParams.PORT) {
   const port = parseInt(envParams.PORT, 10)
@@ -213,38 +262,47 @@ if (envParams.PORT) {
 if (envParams.BIND_IP) {
   global.lx.config.bindIP = envParams.BIND_IP
 }
-if (envParams.ENABLE_WEBPLAYER_AUTH) {
-  global.lx.config['player.enableAuth'] = envParams.ENABLE_WEBPLAYER_AUTH === 'true'
+if (envParams.ENABLE_WEBPLAYER_AUTH !== undefined) {
+  setBoolConfig('player.enableAuth', envParams.ENABLE_WEBPLAYER_AUTH)
 }
 if (envParams.WEBPLAYER_PASSWORD) {
   global.lx.config['player.password'] = envParams.WEBPLAYER_PASSWORD
 }
-if (envParams.DISABLE_TELEMETRY) {
-  global.lx.config.disableTelemetry = envParams.DISABLE_TELEMETRY === 'true'
+if (envParams.DISABLE_TELEMETRY !== undefined) {
+  setBoolConfig('disableTelemetry', envParams.DISABLE_TELEMETRY)
 }
-if (envParams.ENABLE_PUBLIC_USER_RESTRICTION) {
-  global.lx.config['user.enablePublicRestriction'] = envParams.ENABLE_PUBLIC_USER_RESTRICTION === 'true'
+if (envParams.ENABLE_PUBLIC_USER_RESTRICTION !== undefined) {
+  setBoolConfig('user.enablePublicRestriction', envParams.ENABLE_PUBLIC_USER_RESTRICTION)
 }
-if (envParams.ENABLE_PUBLIC_NON_ADMIN_LOCAL_MUSIC) {
-  global.lx.config['user.enablePublicNonAdminLocalMusic'] = envParams.ENABLE_PUBLIC_NON_ADMIN_LOCAL_MUSIC === 'true'
+if (envParams.ENABLE_PUBLIC_NON_ADMIN_LOCAL_MUSIC !== undefined) {
+  setBoolConfig('user.enablePublicNonAdminLocalMusic', envParams.ENABLE_PUBLIC_NON_ADMIN_LOCAL_MUSIC)
 }
-if (envParams.ENABLE_PUBLIC_FAVORITES) {
-  global.lx.config['user.enablePublicFavorites'] = envParams.ENABLE_PUBLIC_FAVORITES === 'true'
+if (envParams.ENABLE_PUBLIC_NON_ADMIN_BROWSER_DOWNLOAD !== undefined) {
+  setBoolConfig('user.enablePublicNonAdminBrowserDownload', envParams.ENABLE_PUBLIC_NON_ADMIN_BROWSER_DOWNLOAD)
 }
-if (envParams.ENABLE_PUBLIC_NON_ADMIN_ACCESS) {
-  global.lx.config['user.enablePublicNonAdminAccess'] = envParams.ENABLE_PUBLIC_NON_ADMIN_ACCESS === 'true'
+if (envParams.ENABLE_PUBLIC_NON_ADMIN_SERVER_CACHE !== undefined) {
+  setBoolConfig('user.enablePublicNonAdminServerCache', envParams.ENABLE_PUBLIC_NON_ADMIN_SERVER_CACHE)
 }
-if (envParams.ENABLE_LOGIN_USER_CACHE_RESTRICTION) {
-  global.lx.config['user.enableLoginCacheRestriction'] = envParams.ENABLE_LOGIN_USER_CACHE_RESTRICTION === 'true'
+if (envParams.ENABLE_PUBLIC_FAVORITES !== undefined) {
+  setBoolConfig('user.enablePublicFavorites', envParams.ENABLE_PUBLIC_FAVORITES)
 }
-if (envParams.ENABLE_CACHE_SIZE_LIMIT) {
-  global.lx.config['user.enableCacheSizeLimit'] = envParams.ENABLE_CACHE_SIZE_LIMIT === 'true'
+if (envParams.ENABLE_PUBLIC_NON_ADMIN_ACCESS !== undefined) {
+  setBoolConfig('user.enablePublicNonAdminAccess', envParams.ENABLE_PUBLIC_NON_ADMIN_ACCESS)
+}
+if (envParams.ENABLE_CUSTOM_MUSIC_DIR !== undefined) {
+  setBoolConfig('user.enableCustomMusicDir', envParams.ENABLE_CUSTOM_MUSIC_DIR)
+}
+if (envParams.ENABLE_LOGIN_USER_CACHE_RESTRICTION !== undefined) {
+  setBoolConfig('user.enableLoginCacheRestriction', envParams.ENABLE_LOGIN_USER_CACHE_RESTRICTION)
+}
+if (envParams.ENABLE_CACHE_SIZE_LIMIT !== undefined) {
+  setBoolConfig('user.enableCacheSizeLimit', envParams.ENABLE_CACHE_SIZE_LIMIT)
 }
 if (envParams.CACHE_SIZE_LIMIT) {
   global.lx.config['user.cacheSizeLimit'] = parseInt(envParams.CACHE_SIZE_LIMIT) || 2000
 }
-if (envParams.PROXY_ALL_ENABLED) {
-  global.lx.config['proxy.all.enabled'] = envParams.PROXY_ALL_ENABLED === 'true'
+if (envParams.PROXY_ALL_ENABLED !== undefined) {
+  setBoolConfig('proxy.all.enabled', envParams.PROXY_ALL_ENABLED)
 }
 if (envParams.PROXY_ALL_ADDRESS) {
   global.lx.config['proxy.all.address'] = envParams.PROXY_ALL_ADDRESS
@@ -256,10 +314,53 @@ if (envParams.PLAYER_PATH !== undefined) {
   global.lx.config['player.path'] = envParams.PLAYER_PATH
 }
 if (envParams.SUBSONIC_ENABLE !== undefined) {
-  global.lx.config['subsonic.enable'] = envParams.SUBSONIC_ENABLE === 'true'
+  setBoolConfig('subsonic.enable', envParams.SUBSONIC_ENABLE)
 }
 if (envParams.SUBSONIC_PATH !== undefined) {
   global.lx.config['subsonic.path'] = envParams.SUBSONIC_PATH
+}
+if (envParams.SUBSONIC_ENABLE_DEBUG !== undefined) {
+  setBoolConfig('subsonic.enableDebug', envParams.SUBSONIC_ENABLE_DEBUG)
+}
+if (envParams.SUBSONIC_ONLINE_SEARCH !== undefined) {
+  setBoolConfig('subsonic.onlineSearch', envParams.SUBSONIC_ONLINE_SEARCH)
+}
+if (envParams.SUBSONIC_ONLINE_SEARCH_MODE) {
+  const mode = envParams.SUBSONIC_ONLINE_SEARCH_MODE as any
+  if (['fallback', 'merge', 'local_only'].includes(mode)) {
+    global.lx.config['subsonic.onlineSearchMode'] = mode
+  }
+}
+if (envParams.SUBSONIC_ONLINE_SEARCH_SOURCES) {
+  global.lx.config['subsonic.onlineSearchSources'] = envParams.SUBSONIC_ONLINE_SEARCH_SOURCES
+}
+if (envParams.SUBSONIC_PUBLIC_LEADERBOARDS !== undefined) {
+  setBoolConfig('subsonic.publicLeaderboards', envParams.SUBSONIC_PUBLIC_LEADERBOARDS)
+}
+if (envParams.SUBSONIC_LEADERBOARD_SOURCE) {
+  const src = envParams.SUBSONIC_LEADERBOARD_SOURCE.trim().toLowerCase()
+  if (['tx', 'wy', 'kg', 'kw', 'mg'].includes(src)) {
+    global.lx.config['subsonic.leaderboardSource'] = src
+  }
+}
+if (envParams.SUBSONIC_LYRIC_TRANSLATION !== undefined) {
+  setBoolConfig('subsonic.lyricTranslation', envParams.SUBSONIC_LYRIC_TRANSLATION)
+}
+if (envParams.SUBSONIC_CACHE_ON_PLAY !== undefined) {
+  setBoolConfig('subsonic.cacheOnPlay', envParams.SUBSONIC_CACHE_ON_PLAY)
+}
+if (envParams.SUBSONIC_PLAY_CACHE_FIRST !== undefined) {
+  setBoolConfig('subsonic.playCacheFirst', envParams.SUBSONIC_PLAY_CACHE_FIRST)
+}
+if (envParams.ARTIST_MAX_FETCH_PAGES) {
+  const pages = parseInt(envParams.ARTIST_MAX_FETCH_PAGES, 10)
+  if (!isNaN(pages) && pages > 0) global.lx.config['artist.maxFetchPages'] = pages
+}
+if (envParams.CACHE_NAMING_PATTERN) {
+  global.lx.config['cache.namingPattern'] = envParams.CACHE_NAMING_PATTERN
+}
+if (envParams.SYSTEM_ALLOW_UNSAFE_VM !== undefined) {
+  setBoolConfig('system.allowUnsafeVM', envParams.SYSTEM_ALLOW_UNSAFE_VM)
 }
 if (envParams.SINGER_SOURCE_PRIORITY !== undefined) {
   const priority = envParams.SINGER_SOURCE_PRIORITY.split(',').filter(s => s === 'tx' || s === 'wy') as Array<'tx' | 'wy'>
@@ -363,10 +464,49 @@ ${global.lx.config.users.map(user => `  ${user.name}: ${user.password}`).join('\
 `)
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { getUserDirname } = require('@/user')
+let hasUserCustomDirModified = false
 for (const user of global.lx.config.users) {
   const dataPath = path.join(global.lx.userPath, getUserDirname(user.name))
   checkAndCreateDir(dataPath)
   user.dataPath = dataPath
+
+  if (user.enableCustomMusicDir) {
+    let isValid = false
+    if (user.customMusicDir && typeof user.customMusicDir === 'string' && user.customMusicDir.trim()) {
+      const resolvedDir = path.resolve(user.customMusicDir.trim())
+      try {
+        if (fs.existsSync(resolvedDir) && fs.statSync(resolvedDir).isDirectory()) {
+          isValid = true
+        }
+      } catch {
+        isValid = false
+      }
+    }
+    if (!isValid) {
+      console.warn(`[StartupCheck] 用户 ${user.name} 的自定义歌曲目录 [${user.customMusicDir || ''}] 无效，已自动关闭自定义目录功能并清除路径`)
+      user.enableCustomMusicDir = false
+      user.customMusicDir = ''
+      hasUserCustomDirModified = true
+    }
+  }
+}
+
+if (hasUserCustomDirModified) {
+  saveConfigToFile()
+  try {
+    fs.writeFileSync(usersJsonPath, JSON.stringify(global.lx.config.users.map(u => ({
+      name: u.name,
+      password: u.password,
+      maxSnapshotNum: u.maxSnapshotNum,
+      'list.addMusicLocationType': u['list.addMusicLocationType'],
+      enableCustomMusicDir: u.enableCustomMusicDir,
+      customMusicDir: u.customMusicDir,
+      allowOperateCustomMusicDir: u.allowOperateCustomMusicDir,
+      allowWriteCustomMusicDir: u.allowWriteCustomMusicDir,
+    })), null, 2))
+  } catch (err) {
+    console.error('Failed to update users.json after custom dir cleanup', err)
+  }
 }
 
 initLogger()
@@ -425,15 +565,15 @@ if (webdavSync.isConfigured()) {
       console.log('Data restored from WebDAV successfully')
 
       // 1. 重新从磁盘加载最新的 config.js 到内存 (解决实时生效问题)
-      const configPath = process.env.CONFIG_PATH || path.join(process.cwd(), 'config.js')
+      const configPath = global.lx.configPath
       if (fs.existsSync(configPath)) {
-        console.log('Reloading config.js after WebDAV restore...')
+        console.log('Reloading config file after WebDAV restore: ' + configPath)
         // 清除 node require 缓存以强制重载
         try {
           delete require.cache[require.resolve(configPath)]
           margeConfig(configPath)
         } catch (e) {
-          console.error('Failed to hot-reload config.js:', e)
+          console.error('Failed to hot-reload config file:', e)
         }
       }
 
@@ -491,24 +631,24 @@ saveConfigToFile()
 
 startServer(global.lx.config.port, global.lx.config.bindIP)
 
-// 监控 config.js 变动以实现热重载 (由于 nodemon 已忽略该文件)
-const rootConfigPath = process.env.CONFIG_PATH || path.join(process.cwd(), 'config.js')
-if (fs.existsSync(rootConfigPath)) {
-  lastConfigHash = getConfigHash(rootConfigPath)
+// 监控配置文件变动以实现热重载 (由于 nodemon 已忽略该文件)
+const activeWatcherConfigPath = global.lx.configPath
+if (fs.existsSync(activeWatcherConfigPath)) {
+  lastConfigHash = getConfigHash(activeWatcherConfigPath)
   let debounceTimer: NodeJS.Timeout | null = null
-  fs.watch(rootConfigPath, (event) => {
+  fs.watch(activeWatcherConfigPath, (event) => {
     if (event === 'change') {
       if (debounceTimer) clearTimeout(debounceTimer)
       debounceTimer = setTimeout(() => {
-        const currentHash = getConfigHash(rootConfigPath)
+        const currentHash = getConfigHash(activeWatcherConfigPath)
         // 如果内容未发生实质改变（如内部写配置触发的 fs.watch 事件），跳过热重载
         if (currentHash && currentHash === lastConfigHash) return
         lastConfigHash = currentHash
 
-        console.log('Detected external config.js change, hot-reloading...')
+        console.log(`Detected external config file change (${activeWatcherConfigPath}), hot-reloading...`)
         try {
-          delete require.cache[require.resolve(rootConfigPath)]
-          margeConfig(rootConfigPath)
+          delete require.cache[require.resolve(activeWatcherConfigPath)]
+          margeConfig(activeWatcherConfigPath)
           // 重新初始化各模块以使用新配置（如果需要）
           if (global.lx.webdavSync) {
             global.lx.webdavSync.updateConfig({
@@ -522,7 +662,7 @@ if (fs.existsSync(rootConfigPath)) {
             })
           }
         } catch (e) {
-          console.error('Hot-reload config.js failed:', e)
+          console.error('Hot-reload config file failed:', e)
         }
       }, 500)
     }

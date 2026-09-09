@@ -9,9 +9,9 @@ LX Music Sync Server has built a unified basic model skeleton (located in `src/d
 The loading and merging of configurations follow the priority sequence from high to low below. High-priority options will **hardly override** the corresponding keys of low-priority ones:
 
 1. **Runtime Environment Variables (Environment Variables)**: Has very high priority. For example, `PORT=9527`.
-2. **WebDAV Cloud Data (WebDAV Cloud Data)**: If WebDAV is configured, the system will try to restore from the cloud on startup. **Restored cloud content will overwrite the local `config.js` and trigger a hot-reload**.
-3. **Explicit Custom Configuration File Path (Custom Config File)**: Static JSON file specified via `CONFIG_PATH`.
-4. **Global Default Entry Configuration (Global Config.js)**: The `config.js` file in the project's root directory.
+2. **WebDAV Cloud Data (WebDAV Cloud Data)**: If WebDAV is configured, the system will try to restore from the cloud on startup. **Restored cloud content will overwrite persistent `data/config.js` and trigger a hot-reload**.
+3. **Explicit Custom Configuration File Path (Custom Config File)**: Path specified via `CONFIG_PATH` (defaults to persistent `data/config.js` inside the data directory).
+4. **Persistent Configuration (Persistent Config)**: The `data/config.js` in the data directory (if absent on first launch, will smoothly migrate from legacy root `config.js`).
 5. **System-level Default Constants (Default Consts)**: Defaults in `src/defaultConfig.ts`.
 
 ---
@@ -28,13 +28,18 @@ This module manages the Node.js listening process and the basic settings of the 
 | :-------------------- | :------------ | :------- | :-------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PORT` | `9527` | Integer | **Service listening port**. It is recommended to avoid using other high-frequency ports in the host (such as 80, 443, 3306). |
 | `BIND_IP` | `0.0.0.0` | String | **Scope of service binding IP interfaces**. Set to `127.0.0.1` to accept only local Lookback calls; set to `0.0.0.0` means listening to all internal and external available network adapters of the host simultaneously. |
-| `ADMIN_PATH` | `''` | String | **Backend management interface path**. Default is empty, i.e., root `/`. |
-| `PLAYER_PATH` | `'/music'` | String | **Web player access path**. Default is `/music`. |
+| `ADMIN_PATH` | `'/music'` | String | **Backend management interface path**. Default is `/music`. |
+| `PLAYER_PATH` | `'/'` | String | **Web player access path**. Default is the root path `/`. |
 | `SERVER_NAME` | `My Sync Server` | String | **Sync service name**. Showed in client connections. |
 | `PROXY_HEADER` | `x-real-ip` | String | **Reverse proxy remote IP penetration identifier**. When the system runs behind reverse proxies or load balancers such as Nginx, it is used to extract the true client source IP address to ensure accurate traceability of equipment audit logs. |
 | `PROXY_ALL_ENABLED` | `false` | Boolean | **Enable global outgoing request proxy**. If enabled, network requests from the server (e.g. search, resolving) will go through the proxy. |
 | `PROXY_ALL_ADDRESS` | `''` | String | **Proxy address**. Supports `http://` or `socks5://`, e.g. `socks5://127.0.0.1:10808`. |
 | `DISABLE_TELEMETRY` | `false` | Boolean | **System telemetry feedback circuit breaker**. Set to `true` will completely block anonymous state probe packets between the system and external nodes, and disable all system-level new version updates or announcement distributions. |
+
+> 💡 **Boolean Environment Variable Format Note**:
+> All boolean environment variables support flexible case-insensitive formats:
+> - **Enabled (True)**: `true` / `1` / `yes` / `y` / `on`
+> - **Disabled (False)**: `false` / `0` / `no` / `n` / `off`
 
 ### II. Persistence and Account Sandbox Management Strategy
 
@@ -50,6 +55,9 @@ This module involves monitoring the status of connected clients and isolation sp
 | `USER_ENABLE_PATH` | `true` | Boolean | **Account-exclusive storage sandbox isolation system (Critical)**. After this state is started, the underlying data system will partition multiple discrete and parallel volumes according to active users in the `/data` directory. Ensure that preference files of different distribution devices and multi-users do not have data unauthorized access. |
 | `USER_ENABLE_ROOT` | `false` | Boolean | **Root directory flattening access override parameter**. When `true`, the above multi-user sandbox volume partitioning operation will become invalid, and data reading and writing will directly pierce and write into the system register in a reduced-dimension manner. |
 | `ENABLE_PUBLIC_USER_RESTRICTION` | `true` | Boolean | **Restrict public user permissions**. If enabled, non-admin public users will be restricted from sensitive operations like uploading source, deleting public sources, caching to server, etc. |
+| `ENABLE_PUBLIC_NON_ADMIN_LOCAL_MUSIC` | `false` | Boolean | **Enable non-admin access to local music**. If enabled, allows non-admin public accounts to access local music. |
+| `ENABLE_PUBLIC_NON_ADMIN_BROWSER_DOWNLOAD` | `true` | Boolean | **Enable non-admin browser download**. If enabled, allows non-admin/public accounts to download songs via browser. |
+| `ENABLE_PUBLIC_NON_ADMIN_SERVER_CACHE` | `false` | Boolean | **Enable non-admin server cache**. If enabled, allows non-admin/public accounts to cache or save songs to server. |
 | `ENABLE_LOGIN_USER_CACHE_RESTRICTION` | `false` | Boolean | **Restrict cache settings for logged-in users**. If enabled, non-admin logged-in users will be restricted from modifying core cache settings. |
 | `ENABLE_CACHE_SIZE_LIMIT` | `false` | Boolean | **Enable automatic cache cleanup**. If enabled, the system will monitor and limit the total user cache size, and automatically delete oldest files (LRU) when the limit is reached. |
 | `CACHE_SIZE_LIMIT` | `2000` | Integer | **Cache size limit (MB)**. The threshold at which the auto-cleanup mechanism is triggered. |
@@ -66,14 +74,14 @@ The underlying periodic polling asynchronous daemon of the service will only be 
 | `SYNC_INTERVAL` | `60` | Integer | Cold shrinking timed parameters (unit: minutes) that trigger full thermal backup and pull comparison synchronization flow periods. |
 
 > 🔖 **Stateful Resurrection and Initialization Mechanism**:
-> 1. **Cloud-First Restore**: If the variables are detected on startup, the system prioritizes pulling archives from the cloud.
-> 2. **Environment-Driven Persistence**: If the cloud config is empty (e.g., first deployment in Docker/Cloud), the system will **automatically persist the current effective configuration (such as ports, passwords set via environment variables) into the local `config.js` and upload it to the cloud** for initialization. This ensures you can establish the initial cloud data solely through environment variables.
+> 1. **Cloud-First Restoration**: If this set of variables is detected at startup, the system will prioritize attempting to pull archives from the cloud.
+> 2. **Environment-Driven Persistence**: If the cloud config is empty (e.g., first deployment in Docker/Cloud), the system will **automatically persist the current effective configuration (such as ports, passwords set via environment variables) into `data/config.js` in the data directory and upload it to the cloud** for initialization. This ensures you can establish the initial cloud data solely through environment variables.
 
 ### IV. Web-side Composite Media Playback Space Protection Logic
 
 | Environment Variable Mapping Key (ENV) | System Default Value | Data Type | Scope and Applicable Scenarios |
 | :------------------------ | :--------- | :------- | :------------------------------------------------------------------------------------------------------------------ |
-| `ENABLE_WEBPLAYER_AUTH` | `false` | Boolean | Whether to establish a separate entry-blocking defense wall for the derived browser access interface (the application entity rendered under the default `/music` path) and refuse direct face-to-face from visitors. |
+| `ENABLE_WEBPLAYER_AUTH` | `false` | Boolean | Whether to establish a separate entry-blocking defense wall for the derived browser access interface (rendered under default root path `/`) and refuse direct face-to-face from visitors. |
 | `WEBPLAYER_PASSWORD` | `123456` | String | If the upper-level authentication mode takes effect, it is the separate password dictionary for verification. This gives administrators the ability to decouple keys for different levels of the audience layer and the backend control panel. |
 
 ### V. Playlist Management Strategy
@@ -88,12 +96,20 @@ The underlying periodic polling asynchronous daemon of the service will only be 
 | :--- | :--- | :--- | :--- |
 | `SUBSONIC_ENABLE` | `true` | Boolean | **Enable Subsonic protocol**. Allows connections from Subsonic-compatible clients. |
 | `SUBSONIC_PATH` | `'/rest'` | String | **Subsonic access path**. Default is `/rest`. |
+| `SUBSONIC_ENABLE_DEBUG` | `false` | Boolean | **Enable Subsonic debug log mode**. Default is `false`. |
+| `SUBSONIC_ONLINE_SEARCH` | `true` | Boolean | **Enable Subsonic online search**. Supports searching and streaming external online tracks in Subsonic clients. |
+| `SUBSONIC_ONLINE_SEARCH_MODE` | `'fallback'` | String | **Subsonic online search mode**. `fallback`, `merge`, or `local_only`. |
+| `SUBSONIC_ONLINE_SEARCH_SOURCES` | `'wy,tx,kw,kg,mg'` | String | **Subsonic default online search sources**. Comma-separated platform codes. |
+| `SUBSONIC_LYRIC_TRANSLATION` | `true` | Boolean | **Include translations in Subsonic lyrics**. |
 
 ### VIII. Business Feature Extension Configuration
 
 | Environment Variable Mapping Key (ENV) | System Default Value | Data Type | Scope and Applicable Scenarios |
 | :--- | :--- | :--- | :--- |
 | `SINGER_SOURCE_PRIORITY` | `'tx,wy'` | String | **Singer source priority**. Controls the priority order for fetching singer details, photos, and Mid. Available values are `tx` (Tencent) and `wy` (Netease), separated by commas. |
+| `ARTIST_MAX_FETCH_PAGES` | `20` | Integer | **Maximum fetch pages for artist tracks**. Upper limit when fetching full song lists for artists. |
+| `CACHE_NAMING_PATTERN` | `'simple'` | String | **Cache file naming pattern**. `simple` or `custom`. |
+| `SYSTEM_ALLOW_UNSAFE_VM` | `false` | Boolean | **Allow unsafe VM custom source scripts**. If enabled, allows running custom source scripts requiring VM sandbox features (use with caution). |
 
 ### IX. (Advanced Feature) Silent Preset Accounts in CLI Environment
 

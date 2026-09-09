@@ -21,6 +21,26 @@ declare namespace LX {
      * 添加歌曲到我的列表时的方式
      */
     'list.addMusicLocationType'?: AddMusicLocationType
+
+    /**
+     * 是否启用此用户自定义歌曲目录
+     */
+    enableCustomMusicDir?: boolean
+
+    /**
+     * 自定义歌曲目录路径
+     */
+    customMusicDir?: string
+
+    /**
+     * 是否允许操作目录歌曲（如添加、修改、删除歌曲或分类）
+     */
+    allowOperateCustomMusicDir?: boolean
+
+    /**
+     * 是否允许写入歌曲文件（如手动关联、批量更新元数据、批量嵌入歌词）
+     */
+    allowWriteCustomMusicDir?: boolean
   }
 
   interface UserConfig extends User {
@@ -76,6 +96,16 @@ declare namespace LX {
      * 是否开启非管理员访问本地音乐
      */
     'user.enablePublicNonAdminLocalMusic'?: boolean
+
+    /**
+     * 是否开启非管理员浏览器下载
+     */
+    'user.enablePublicNonAdminBrowserDownload'?: boolean
+
+    /**
+     * 是否开启非管理员服务器缓存
+     */
+    'user.enablePublicNonAdminServerCache'?: boolean
 
     /**
      * 是否开启公开收藏和歌曲
@@ -171,6 +201,11 @@ declare namespace LX {
     'player.password'?: string
 
     /**
+     * 是否启用自定义歌曲目录
+     */
+    'user.enableCustomMusicDir'?: boolean
+
+    /**
      * 是否启用针对所有外发请求的代理 (目前主要用于 Music SDK)
      */
     'proxy.all.enabled'?: boolean
@@ -186,12 +221,12 @@ declare namespace LX {
     disableTelemetry?: boolean
 
     /**
-     * 后台管理界面访问路径，默认为空字符串（表示根路径 /）
+     * 后台管理界面访问路径，默认为 /admin
      */
     'admin.path'?: string
 
     /**
-     * Web播放器访问路径，默认为 /music
+     * Web播放器访问路径，默认为空字符串（表示根路径 /）
      */
     'player.path'?: string
 
@@ -206,7 +241,7 @@ declare namespace LX {
     'subsonic.path'?: string
 
     /**
-     * 是否开启 Subsonic 调试日志模式 (默认 false/true)
+     * 是否开启 Subsonic 调试日志模式 (默认 false)
      */
     'subsonic.enableDebug'?: boolean
 
@@ -221,6 +256,16 @@ declare namespace LX {
     'subsonic.onlineSearchMode'?: 'fallback' | 'merge' | 'local_only'
 
     /**
+     * 是否在 Subsonic 中公开在线排行榜(只读虚拟播放列表) (默认 false)
+     */
+    'subsonic.publicLeaderboards'?: boolean
+
+    /**
+     * Subsonic 在线排行榜音源平台 (tx | wy | kg | kw | mg，默认 tx)
+     */
+    'subsonic.leaderboardSource'?: string
+
+    /**
      * Subsonic 在线搜索默认平台 (如 wy,tx,kw,kg,mg)
      */
     'subsonic.onlineSearchSources'?: string
@@ -229,6 +274,19 @@ declare namespace LX {
      * Subsonic 歌词是否包含翻译 (默认 true)
      */
     'subsonic.lyricTranslation'?: boolean
+
+    /**
+     * 是否在 Subsonic 播放音乐时触发服务器缓存保存 (默认 false)
+     * 开启后,每次通过 Subsonic 协议播放的曲目会在后台落盘到该用户的缓存目录,
+     * 已缓存的曲目会被 downloadAndCache 自动跳过,不会重复下载。
+     */
+    'subsonic.cacheOnPlay'?: boolean
+
+    /**
+     * 是否在 Subsonic 播放音乐时优先使用本地缓存/下载文件直接流式传输 (默认 true)
+     * 开启后,若服务器该用户目录下已存在此歌曲的缓存或下载文件,直接传输本地流,避免向源站请求在线直链
+     */
+    'subsonic.playCacheFirst'?: boolean
 
     /**
      * 歌手信息源优先级
